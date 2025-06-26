@@ -1,0 +1,13 @@
+pydantic-ai
+python-telegram-bot
+supabase
+openai
+python-dotenv
+httpx
+asyncio
+duckduckgo-search
+tiktoken
+aiohttp
+uvloop
+logfire
+asyncpg
