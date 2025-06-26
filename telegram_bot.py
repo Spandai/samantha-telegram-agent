@@ -8,6 +8,9 @@ import os
 import logging
 from typing import Dict, Optional
 from datetime import datetime
+from aiohttp import web
+from aiohttp.web import Application as WebApp, Request, Response
+import threading
 
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
