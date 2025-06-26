@@ -1,13 +1,11 @@
 pydantic-ai
-python-telegram-bot
+python-telegram-bot==21.0.1
 supabase
 openai
 python-dotenv
 httpx
-asyncio
 duckduckgo-search
 tiktoken
 aiohttp
-uvloop
 logfire
-asyncpg
+requests
