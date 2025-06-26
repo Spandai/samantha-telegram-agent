@@ -45,8 +45,11 @@ class SamanthaAgent:
         self.budget_tracker = BudgetTracker(self.supabase, daily_budget, monthly_budget)
         
         # Initialize Pydantic AI agent
+        # Set OpenAI API key as environment variable (required by pydantic-ai)
+        os.environ['OPENAI_API_KEY'] = openai_api_key
+        
         self.agent = Agent(
-            OpenAIModel('gpt-4o-mini', api_key=openai_api_key),
+            'openai:gpt-4o-mini',
             deps_type=AgentDeps,
             retries=2
         )
