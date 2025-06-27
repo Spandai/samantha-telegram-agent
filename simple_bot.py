@@ -7,11 +7,12 @@ Mêmes fonctionnalités, 10x plus rapide
 import os
 import asyncio
 import logging
-import json
 import requests
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import datetime, timezone
+from typing import List, Optional
 from dataclasses import dataclass
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import openai
 from telegram import Update, BotCommand
@@ -22,6 +23,30 @@ from supabase import create_client, Client
 # Configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class HealthHandler(BaseHTTPRequestHandler):
+    """Health check server pour Render"""
+    
+    def do_GET(self):
+        """Répondre OK aux health checks"""
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'Samantha Bot is LIVE! 🤖')
+    
+    def log_message(self, format, *args):
+        """Supprimer logs HTTP verbeux"""
+        pass
+
+def start_health_server():
+    """Lancer serveur health en arrière-plan"""
+    port = int(os.getenv('PORT', 8000))
+    try:
+        server = HTTPServer(('0.0.0.0', port), HealthHandler)
+        logger.info(f"🏥 Health server démarré sur port {port}")
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"❌ Erreur health server: {e}")
 
 @dataclass
 class Config:
@@ -36,7 +61,7 @@ class SimpleMemory:
     """Mémoire simple mais efficace avec Supabase"""
     
     def __init__(self, supabase_url: str, supabase_key: str):
-        self.supabase: Client = create_client(supabase_url, supabase_key)
+        self.supabase = create_client(supabase_url, supabase_key)
         self.init_db()
     
     def init_db(self):
@@ -138,8 +163,8 @@ class SimpleBudget:
     def get_daily_spent(self, user_id: str) -> float:
         """Coût du jour"""
         try:
-            # Supabase ne supporte pas DATE() comme SQLite, on utilise une approche différente
-            today = datetime.now().strftime('%Y-%m-%d')
+            # UTC timezone aware
+            today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
             response = self.memory.supabase.table('budget').select('cost').eq('user_id', user_id).gte('timestamp', today).execute()
             return sum(row['cost'] for row in response.data)
         except Exception as e:
@@ -356,6 +381,11 @@ async def main():
     """Point d'entrée principal"""
     from dotenv import load_dotenv
     load_dotenv()
+    
+    # Démarrer health server en arrière-plan (pour Render)
+    health_thread = Thread(target=start_health_server, daemon=True)
+    health_thread.start()
+    logger.info("🏥 Health server thread démarré")
     
     # Configuration
     config = Config(
