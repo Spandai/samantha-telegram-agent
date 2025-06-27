@@ -2,3 +2,4 @@ python-telegram-bot==21.0.1
 openai
 python-dotenv
 requests
+supabase

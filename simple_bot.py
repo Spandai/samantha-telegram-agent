@@ -7,7 +7,6 @@ Mêmes fonctionnalités, 10x plus rapide
 import os
 import asyncio
 import logging
-import sqlite3
 import json
 import requests
 from datetime import datetime
@@ -18,6 +17,7 @@ import openai
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
+from supabase import create_client, Client
 
 # Configuration
 logging.basicConfig(level=logging.INFO)
@@ -27,109 +27,75 @@ logger = logging.getLogger(__name__)
 class Config:
     telegram_token: str
     openai_api_key: str
+    supabase_url: str
+    supabase_key: str
     daily_budget: float = 1.50
     agent_name: str = "Samantha"
-    db_path: str = "samantha.db"
 
 class SimpleMemory:
-    """Mémoire simple mais efficace avec SQLite"""
+    """Mémoire simple mais efficace avec Supabase"""
     
-    def __init__(self, db_path: str):
-        self.db_path = db_path
+    def __init__(self, supabase_url: str, supabase_key: str):
+        self.supabase: Client = create_client(supabase_url, supabase_key)
         self.init_db()
     
     def init_db(self):
-        """Créer les tables si elles n'existent pas"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                id INTEGER PRIMARY KEY,
-                user_id TEXT,
-                message TEXT,
-                is_user BOOLEAN,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS memory (
-                id INTEGER PRIMARY KEY,
-                user_id TEXT,
-                key TEXT,
-                value TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS budget (
-                id INTEGER PRIMARY KEY,
-                user_id TEXT,
-                cost REAL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.commit()
-        conn.close()
+        """Tables créées via Supabase dashboard"""
+        # Tables: conversations, memory, budget
+        # Schéma identique à SQLite mais géré par Supabase
+        pass
     
     def store_message(self, user_id: str, message: str, is_user: bool = True):
         """Stocker un message"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            "INSERT INTO conversations (user_id, message, is_user) VALUES (?, ?, ?)",
-            (user_id, message, is_user)
-        )
-        conn.commit()
-        conn.close()
+        try:
+            self.supabase.table('conversations').insert({
+                'user_id': user_id,
+                'message': message,
+                'is_user': is_user
+            }).execute()
+        except Exception as e:
+            logger.error(f"Erreur store_message: {e}")
     
     def get_context(self, user_id: str, limit: int = 10) -> str:
         """Récupérer le contexte récent"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute("""
-            SELECT message, is_user FROM conversations 
-            WHERE user_id = ? 
-            ORDER BY timestamp DESC LIMIT ?
-        """, (user_id, limit))
-        
-        messages = []
-        for message, is_user in reversed(cursor.fetchall()):
-            speaker = "User" if is_user else "Samantha"
-            messages.append(f"{speaker}: {message}")
-        
-        conn.close()
-        return "\n".join(messages)
+        try:
+            response = self.supabase.table('conversations').select('message, is_user').eq('user_id', user_id).order('timestamp', desc=True).limit(limit).execute()
+            
+            messages = []
+            for row in reversed(response.data):
+                speaker = "User" if row['is_user'] else "Samantha"
+                messages.append(f"{speaker}: {row['message']}")
+            
+            return "\n".join(messages)
+        except Exception as e:
+            logger.error(f"Erreur get_context: {e}")
+            return ""
     
     def search_memory(self, user_id: str, query: str) -> List[str]:
         """Rechercher dans l'historique"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute("""
-            SELECT message FROM conversations 
-            WHERE user_id = ? AND message LIKE ? 
-            ORDER BY timestamp DESC LIMIT 5
-        """, (user_id, f"%{query}%"))
-        
-        results = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        return results
+        try:
+            response = self.supabase.table('conversations').select('message').eq('user_id', user_id).ilike('message', f'%{query}%').order('timestamp', desc=True).limit(5).execute()
+            return [row['message'] for row in response.data]
+        except Exception as e:
+            logger.error(f"Erreur search_memory: {e}")
+            return []
     
     def remember(self, user_id: str, key: str, value: str):
         """Stocker info importante"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            "INSERT OR REPLACE INTO memory (user_id, key, value) VALUES (?, ?, ?)",
-            (user_id, key, value)
-        )
-        conn.commit()
-        conn.close()
+        try:
+            # Upsert: update if exists, insert if not
+            self.supabase.table('memory').upsert({'user_id': user_id, 'key': key, 'value': value}).execute()
+        except Exception as e:
+            logger.error(f"Erreur remember: {e}")
     
     def get_memory(self, user_id: str, key: str) -> Optional[str]:
         """Récupérer info stockée"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute(
-            "SELECT value FROM memory WHERE user_id = ? AND key = ?",
-            (user_id, key)
-        )
-        result = cursor.fetchone()
-        conn.close()
-        return result[0] if result else None
+        try:
+            response = self.supabase.table('memory').select('value').eq('user_id', user_id).eq('key', key).execute()
+            return response.data[0]['value'] if response.data else None
+        except Exception as e:
+            logger.error(f"Erreur get_memory: {e}")
+            return None
 
 class SimpleSearch:
     """Recherche web simple avec DuckDuckGo"""
@@ -161,24 +127,24 @@ class SimpleBudget:
     
     def track_cost(self, user_id: str, cost: float):
         """Tracker un coût"""
-        conn = sqlite3.connect(self.memory.db_path)
-        conn.execute(
-            "INSERT INTO budget (user_id, cost) VALUES (?, ?)",
-            (user_id, cost)
-        )
-        conn.commit()
-        conn.close()
+        try:
+            self.memory.supabase.table('budget').insert({
+                'user_id': user_id,
+                'cost': cost
+            }).execute()
+        except Exception as e:
+            logger.error(f"Erreur track_cost: {e}")
     
     def get_daily_spent(self, user_id: str) -> float:
         """Coût du jour"""
-        conn = sqlite3.connect(self.memory.db_path)
-        cursor = conn.execute("""
-            SELECT SUM(cost) FROM budget 
-            WHERE user_id = ? AND DATE(timestamp) = DATE('now')
-        """, (user_id,))
-        result = cursor.fetchone()[0] or 0
-        conn.close()
-        return result
+        try:
+            # Supabase ne supporte pas DATE() comme SQLite, on utilise une approche différente
+            today = datetime.now().strftime('%Y-%m-%d')
+            response = self.memory.supabase.table('budget').select('cost').eq('user_id', user_id).gte('timestamp', today).execute()
+            return sum(row['cost'] for row in response.data)
+        except Exception as e:
+            logger.error(f"Erreur get_daily_spent: {e}")
+            return 0
     
     def can_spend(self, user_id: str) -> bool:
         """Vérifier budget"""
@@ -189,7 +155,7 @@ class SamanthaBot:
     
     def __init__(self, config: Config):
         self.config = config
-        self.memory = SimpleMemory(config.db_path)
+        self.memory = SimpleMemory(config.supabase_url, config.supabase_key)
         self.search = SimpleSearch()
         self.budget = SimpleBudget(self.memory, config.daily_budget)
         
@@ -395,13 +361,15 @@ async def main():
     config = Config(
         telegram_token=os.getenv('TELEGRAM_BOT_TOKEN'),
         openai_api_key=os.getenv('OPENAI_API_KEY'),
+        supabase_url=os.getenv('SUPABASE_URL'),
+        supabase_key=os.getenv('SUPABASE_ANON_KEY'),
         daily_budget=float(os.getenv('DAILY_BUDGET_USD', '1.50')),
         agent_name=os.getenv('AGENT_NAME', 'Samantha')
     )
     
     # Validation
-    if not config.telegram_token or not config.openai_api_key:
-        logger.error("❌ Variables TELEGRAM_BOT_TOKEN et OPENAI_API_KEY requises")
+    if not config.telegram_token or not config.openai_api_key or not config.supabase_url or not config.supabase_key:
+        logger.error("❌ Variables TELEGRAM_BOT_TOKEN, OPENAI_API_KEY, SUPABASE_URL et SUPABASE_ANON_KEY requises")
         return
     
     # Lancer bot
